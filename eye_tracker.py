@@ -3,6 +3,7 @@ import numpy as np
 import dlib
 from eye import Eye
 import math
+import os
 
 GREEN = (0,255,0)
 THICKNESS_2 = 2
@@ -10,19 +11,38 @@ PREDICTOR_FILENAME = "shape_predictor_68_face_landmarks.dat"
 CLOSED_EYE_RATIO = 4.5
 OPEN_EYE_RATIO = 3.5
 
-def real_time():
-    detector = dlib.get_frontal_face_detector()
-    predictor = dlib.shape_predictor(PREDICTOR_FILENAME)
-    cap = cv2.VideoCapture(0)
+def setup_eyes_vars():
     is_left_eye_closed = False
     is_right_eye_closed = False
     are_eyes_closed = False
     num_of_frames_after_blink = 0
+    num_of_blinks = 0
+
+    return is_left_eye_closed, is_right_eye_closed, are_eyes_closed, num_of_frames_after_blink, num_of_blinks 
+
+def setup_gaze_vars():
     num_of_frames_after_gaze_direction_change = 0
     gaze_direction = "CENTER"
     gazes_to_left = 0
     gazes_to_right = 0
-    num_of_blinks = 0
+
+    return gaze_direction, num_of_frames_after_gaze_direction_change, gazes_to_left, gazes_to_right
+
+def real_time(threshold_level):
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor(PREDICTOR_FILENAME)
+    cap = cv2.VideoCapture(0)
+    # is_left_eye_closed = False
+    # is_right_eye_closed = False
+    # are_eyes_closed = False
+    # num_of_frames_after_blink = 0
+    # num_of_frames_after_gaze_direction_change = 0
+    # gaze_direction = "CENTER"
+    # gazes_to_left = 0
+    # gazes_to_right = 0
+    is_left_eye_closed, is_right_eye_closed, are_eyes_closed, num_of_frames_after_blink, num_of_blinks = setup_eyes_vars()
+    gaze_direction, num_of_frames_after_gaze_direction_change, gazes_to_left, gazes_to_right = setup_gaze_vars()
+    # num_of_blinks = 0
     is_active = True
 
     while is_active:
@@ -50,7 +70,7 @@ def real_time():
                 num_of_blinks += 1
             else:
                 left_eye_region = get_only_eye_region(left_eye)
-                threshold_gray_eye_frame = get_eye_gaussed_thresholded_frame(left_eye_region, frame)
+                threshold_gray_eye_frame = get_eye_gaussed_thresholded_frame(left_eye_region, frame, threshold_level)
                 cv2.imshow("Eye frame", threshold_gray_eye_frame)
 
                 left_part, center_part, right_part = split_eye_frame_into_three_parts(threshold_gray_eye_frame)
@@ -84,7 +104,7 @@ def get_only_eye_region(left_eye:Eye):
 
     return eye_region
 
-def get_eye_gaussed_thresholded_frame(left_eye_region, frame):
+def get_eye_gaussed_thresholded_frame(left_eye_region, frame, threshold_level=45):
     min_x = np.min(left_eye_region[:,0])
     max_x = np.max(left_eye_region[:,0])
     min_y = np.min(left_eye_region[:,1])
@@ -96,7 +116,7 @@ def get_eye_gaussed_thresholded_frame(left_eye_region, frame):
     # cv2.imshow("Eye frame", gray_eye_frame)
 
     gray_eye_frame = cv2.GaussianBlur(gray_eye_frame, (7,7), 0) # kernel params must be odd numbers
-    _, threshold_gray_eye_frame = cv2.threshold(gray_eye_frame, 45, 255, cv2.THRESH_BINARY_INV)
+    _, threshold_gray_eye_frame = cv2.threshold(gray_eye_frame, threshold_level, 255, cv2.THRESH_BINARY_INV)
 
     return threshold_gray_eye_frame
 
@@ -234,5 +254,122 @@ def determine_gaze_direction(gaze_direction, white_on_left_part, white_on_center
 
     return gaze_direction, increase_left, increase_right, num_of_frames_after_gaze_direction_change
 
+def test():
+    folder = "eye_tracker_test_data"
+    video_names = os.listdir(folder)
+
+    sum_of_errors = 0
+    num_of_videos = len(video_names)
+
+    print("naziv\t\ttacno\tdobijeno")
+    for video_name in video_names:
+        errors = 0
+        blinks, lefts, rights = parse_video_stats(video_name)
+        counted_blinks, counted_lefts, counted_rights = analyse_video(folder + "/" + video_name)
+        errors = abs(counted_blinks - blinks) + abs(counted_lefts - lefts) + abs(counted_rights - rights)
+        print("\n" + video_name)
+        print("\tBLINKS:\t" + str(blinks) + "\t" + str(counted_blinks))
+        print("\tLEFTS:\t" + str(lefts) + "\t" + str(counted_lefts))
+        print("\tRIGHTS:\t" + str(rights) + "\t" + str(counted_rights))
+        sum_of_errors += errors
+
+    mae = sum_of_errors / num_of_videos
+    print("\nMAE: " + str(mae))
+
+def parse_video_stats(filename:str):
+    stats = filename.split(".")[0]
+    splitted_stats = stats.split("_")
+    blinks = int(splitted_stats[0])
+    lefts = int(splitted_stats[1])
+    rights = int(splitted_stats[2])
+
+    return blinks, lefts, rights
+
+def analyse_video(video_path):
+    # ucitavanje videa
+    frame_num = 0
+    cap = cv2.VideoCapture(video_path)
+    cap.set(1, frame_num) # indeksiranje frejmova
+    detector = dlib.get_frontal_face_detector()
+    predictor = dlib.shape_predictor(PREDICTOR_FILENAME)
+    is_left_eye_closed, is_right_eye_closed, are_eyes_closed, num_of_frames_after_blink, num_of_blinks = setup_eyes_vars()
+    gaze_direction, num_of_frames_after_gaze_direction_change, gazes_to_left, gazes_to_right = setup_gaze_vars()
+
+    while True:
+        frame_num += 1
+        grabbed, frame = cap.read()
+
+        # ako frejm nije zahvacen
+        # znaci da se stiglo do kraja videa
+        if not grabbed:
+            break
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+        num_of_frames_after_blink += 1
+        num_of_frames_after_gaze_direction_change += 1
+
+        faces = detector(gray)
+        for face in faces:
+            # add_face_rectangle(frame, face)
+            landmarks = predictor(gray, face)
+            left_eye = get_left_eye(landmarks)
+            right_eye = get_right_eye(landmarks)
+            # draw_lines_for_eye(frame, left_eye)
+            # draw_lines_for_eye(frame, right_eye)
+            left_eye_ratio = get_eye_distance_ration(left_eye)
+            right_eye_ratio = get_eye_distance_ration(right_eye)
+            # print(left_eye_ratio, right_eye_ratio)
+
+            is_left_eye_closed, is_right_eye_closed, num_of_frames_after_blink, has_blinked = determine_if_blinked(is_left_eye_closed, left_eye_ratio, is_right_eye_closed, right_eye_ratio, num_of_frames_after_blink)
+            
+            if (has_blinked):
+                num_of_blinks += 1
+            else:
+                left_eye_region = get_only_eye_region(left_eye)
+                threshold_gray_eye_frame = get_eye_gaussed_thresholded_frame(left_eye_region, frame)
+                # cv2.imshow("Eye frame", threshold_gray_eye_frame)
+
+                left_part, center_part, right_part = split_eye_frame_into_three_parts(threshold_gray_eye_frame)
+                # show_eye_parts_frames(left_part, center_part, right_part)
+  
+                white_on_left_part, white_on_center_part, white_on_right_part = count_white_surface(left_part, center_part, right_part)
+
+                # print(white_on_left_part, white_on_center_part, white_on_right_part)
+                gaze_direction, increase_left, increase_right, num_of_frames_after_gaze_direction_change = determine_gaze_direction(gaze_direction, white_on_left_part, white_on_center_part, white_on_right_part, num_of_frames_after_gaze_direction_change, num_of_frames_after_blink)
+                gazes_to_left += increase_left
+                gazes_to_right += increase_right
+
+            # print("BLINKS: " + str(num_of_blinks) + "   " + "LEFT: " + str(gazes_to_left) + "   " + "RIGHT: " + str(gazes_to_right))
+        # cv2.imshow("Frame", frame)
+        
+
+    print(num_of_blinks, gazes_to_left, gazes_to_right)
+
+    return num_of_blinks, gazes_to_left, gazes_to_right
+
 if __name__ == "__main__":
-    real_time()
+    # real_time()
+    invalid_choice = True
+    invalid_choice_threshold = True
+
+    while invalid_choice:
+        choice = input("<test/realtime>: ")
+        
+        if choice in ["test", "realtime"]:
+            invalid_choice = False
+
+        if choice == "test":
+            test()
+        elif choice == "realtime":
+            while invalid_choice_threshold:
+                threshold_level = input("threshold_level <1-254>: ")
+
+                try:
+                    threshold_level = int(threshold_level)
+
+                    if (threshold_level >= 1 and threshold_level <= 254):
+                        invalid_choice_threshold = False
+                        real_time(threshold_level)
+                except:
+                    print("from 1 to 254 !")
