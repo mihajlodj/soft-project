@@ -4,6 +4,8 @@ import dlib
 from eye import Eye
 import math
 import os
+from facedetector import FACE_DETECTOR
+import tensorflow as tf
 
 GREEN = (0,255,0)
 THICKNESS_2 = 2
@@ -29,6 +31,7 @@ def setup_gaze_vars():
     return gaze_direction, num_of_frames_after_gaze_direction_change, gazes_to_left, gazes_to_right
 
 def real_time(threshold_level):
+    facedetector = tf.keras.models.load_model(FACE_DETECTOR)
     detector = dlib.get_frontal_face_detector()
     predictor = dlib.shape_predictor(PREDICTOR_FILENAME)
     cap = cv2.VideoCapture(0)
@@ -49,45 +52,54 @@ def real_time(threshold_level):
         _, frame = cap.read()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        num_of_frames_after_blink += 1
-        num_of_frames_after_gaze_direction_change += 1
+        tfframe = frame[50:500, 50:500, :]
+        rgb = cv2.cvtColor(tfframe, cv2.COLOR_BGR2RGB)
+        resized = tf.image.resize(rgb, (120, 120))
 
-        faces = detector(gray)
-        for face in faces:
-            # add_face_rectangle(frame, face)
-            landmarks = predictor(gray, face)
-            left_eye = get_left_eye(landmarks)
-            right_eye = get_right_eye(landmarks)
-            # draw_lines_for_eye(frame, left_eye)
-            # draw_lines_for_eye(frame, right_eye)
-            left_eye_ratio = get_eye_distance_ration(left_eye)
-            right_eye_ratio = get_eye_distance_ration(right_eye)
-            # print(left_eye_ratio, right_eye_ratio)
+        yhat = facedetector.predict(np.expand_dims(resized / 255, 0))
 
-            is_left_eye_closed, is_right_eye_closed, num_of_frames_after_blink, has_blinked = determine_if_blinked(is_left_eye_closed, left_eye_ratio, is_right_eye_closed, right_eye_ratio, num_of_frames_after_blink)
-            
-            if (has_blinked):
-                num_of_blinks += 1
-            else:
-                left_eye_region = get_only_eye_region(left_eye)
-                threshold_gray_eye_frame = get_eye_gaussed_thresholded_frame(left_eye_region, frame, threshold_level)
-                cv2.imshow("Eye frame", threshold_gray_eye_frame)
+        if yhat[0] > 0.5:
 
-                left_part, center_part, right_part = split_eye_frame_into_three_parts(threshold_gray_eye_frame)
-                show_eye_parts_frames(left_part, center_part, right_part)
-  
-                white_on_left_part, white_on_center_part, white_on_right_part = count_white_surface(left_part, center_part, right_part)
+            num_of_frames_after_blink += 1
+            num_of_frames_after_gaze_direction_change += 1
 
-                # print(white_on_left_part, white_on_center_part, white_on_right_part)
-                gaze_direction, increase_left, increase_right, num_of_frames_after_gaze_direction_change = determine_gaze_direction(gaze_direction, white_on_left_part, white_on_center_part, white_on_right_part, num_of_frames_after_gaze_direction_change, num_of_frames_after_blink)
-                gazes_to_left += increase_left
-                gazes_to_right += increase_right
+            faces = detector(gray)
+            for face in faces:
+                cv2.putText(frame, "Face", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+                # add_face_rectangle(frame, face)
+                landmarks = predictor(gray, face)
+                left_eye = get_left_eye(landmarks)
+                right_eye = get_right_eye(landmarks)
+                # draw_lines_for_eye(frame, left_eye)
+                # draw_lines_for_eye(frame, right_eye)
+                left_eye_ratio = get_eye_distance_ration(left_eye)
+                right_eye_ratio = get_eye_distance_ration(right_eye)
+                # print(left_eye_ratio, right_eye_ratio)
 
-            print("BLINKS: " + str(num_of_blinks) + "   " + "LEFT: " + str(gazes_to_left) + "   " + "RIGHT: " + str(gazes_to_right))
+                is_left_eye_closed, is_right_eye_closed, num_of_frames_after_blink, has_blinked = determine_if_blinked(is_left_eye_closed, left_eye_ratio, is_right_eye_closed, right_eye_ratio, num_of_frames_after_blink)
+
+                if (has_blinked):
+                    num_of_blinks += 1
+                else:
+                    left_eye_region = get_only_eye_region(left_eye)
+                    threshold_gray_eye_frame = get_eye_gaussed_thresholded_frame(left_eye_region, frame, threshold_level)
+                    cv2.imshow("Eye frame", threshold_gray_eye_frame)
+
+                    left_part, center_part, right_part = split_eye_frame_into_three_parts(threshold_gray_eye_frame)
+                    show_eye_parts_frames(left_part, center_part, right_part)
+
+                    white_on_left_part, white_on_center_part, white_on_right_part = count_white_surface(left_part, center_part, right_part)
+
+                    # print(white_on_left_part, white_on_center_part, white_on_right_part)
+                    gaze_direction, increase_left, increase_right, num_of_frames_after_gaze_direction_change = determine_gaze_direction(gaze_direction, white_on_left_part, white_on_center_part, white_on_right_part, num_of_frames_after_gaze_direction_change, num_of_frames_after_blink)
+                    gazes_to_left += increase_left
+                    gazes_to_right += increase_right
+
+                print("BLINKS: " + str(num_of_blinks) + "   " + "LEFT: " + str(gazes_to_left) + "   " + "RIGHT: " + str(gazes_to_right))
         cv2.imshow("Frame", frame)
 
         key = cv2.waitKey(1)
-        if key == 27:
+        if key == 27 or cv2.waitKey(1) & 0xFF == ord('q'):
             is_active = False
 
     cap.release()
@@ -349,6 +361,9 @@ def analyse_video(video_path):
     return num_of_blinks, gazes_to_left, gazes_to_right
 
 if __name__ == "__main__":
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
     # real_time()
     invalid_choice = True
     invalid_choice_threshold = True
